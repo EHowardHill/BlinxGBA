@@ -1,27 +1,48 @@
+// Enhanced physics with full pushing mechanics
+
 #include <bn_core.h>
 #include <bn_keypad.h>
+#include <bn_blending.h>
 #include <bn_cameras.h>
 #include <bn_camera_ptr.h>
 #include <bn_sprite_ptr.h>
 #include <bn_regular_bg_ptr.h>
 #include <bn_log.h>
+#include <bn_vector.h>
 
-// Backgrounds
+// Backgrounds and sprites
 #include <bn_regular_bg_items_bg_test01.h>
 #include <bn_regular_bg_items_bg_test02.h>
-
-// Sprites
 #include "bn_sprite_items_spr_test01.h"
+
+// Include our physics module
+#include "physics.h"
 
 using namespace bn;
 using namespace keypad;
+
+fixed_t<12> lerp(fixed a, int b, fixed_t<12> t)
+{
+    return a * (1 - t) + b * t;
+}
+
+const int LEFT = 1;
+const int RIGHT = 2;
+const int JUMP = 4;
+const int DASH = 8;
 
 constexpr int TILE_SIZE = 32;
 constexpr int to_tile(int pixel) { return pixel / TILE_SIZE; }
 constexpr int to_pixel(int tile) { return tile * TILE_SIZE; }
 
+// Forward declarations
+struct clone_ptr;
+struct player_ptr;
+
+// Level structure
 struct level_ptr
 {
+    const regular_bg_item *bg_item;
     const int collisions[512];
     int size_x;
     int size_y;
@@ -29,13 +50,12 @@ struct level_ptr
     int init_y;
 };
 
-// Fixed collision resolution
+// Collision resolution
 constexpr bool resolve(const level_ptr *level, fixed x, fixed y)
 {
     int tile_x = to_tile(x.integer());
     int tile_y = to_tile(y.integer());
 
-    // Bounds checking
     if (tile_x < 0 || tile_x >= level->size_x ||
         tile_y < 0 || tile_y >= level->size_y)
         return true;
@@ -44,116 +64,599 @@ constexpr bool resolve(const level_ptr *level, fixed x, fixed y)
     return level->collisions[index] > 0;
 }
 
-class Player
+// Enhanced player with physics integration
+struct player_ptr : public entity_base
 {
-public:
+    const level_ptr *level;
+    const fixed_t<4> gravity = 0.25;
+    const fixed_t<4> move_speed = 2;
+    const int max_jumps = 1;
+
+    camera_ptr *camera;
     sprite_ptr sp = sprite_items::spr_test01.create_sprite(0, 0);
     fixed_t<4> velocity_y = 0;
     fixed_t<4> velocity_x = 0;
-    const fixed_t<4> gravity = 0.5;
-    const fixed_t<4> move_speed = 2;
-    camera_ptr *camera;
-    const level_ptr *level;
+
     bool on_ground = false;
     int jump_count = 0;
-    const int max_jumps = 2;
 
-    Player(camera_ptr *camera_, const level_ptr *level_) : camera(camera_), level(level_)
+    player_ptr(camera_ptr *camera_, const level_ptr *level_) : camera(camera_), level(level_)
     {
         sp.set_camera(*camera);
         sp.set_position(to_pixel(level->init_x), to_pixel(level->init_y));
+        _x = sp.x();
+        _y = sp.y();
     }
 
-    bool check_collision(fixed x, fixed y)
+    void set_position(fixed new_x, fixed new_y) override
     {
-        // Fixed: 32x32 sprite dimensions for pixel-perfect collision
+        sp.set_position(new_x, new_y);
+        _x = new_x;
+        _y = new_y;
+    }
+
+    bool check_level_collision(fixed test_x, fixed test_y) const override
+    {
         constexpr int sprite_width = 32;
         constexpr int sprite_height = 32;
 
-        // For a 32x32 sprite centered at (x, y), check the bounds
-        // Sprite occupies from (x-16, y-16) to (x+15, y+15)
-        fixed left = x - sprite_width / 2;        // x - 16
-        fixed right = x + sprite_width / 2 - 1;   // x + 15 (rightmost pixel)
-        fixed top = y - sprite_height / 2;        // y - 16
-        fixed bottom = y + sprite_height / 2 - 1; // y + 15 (bottommost pixel)
+        fixed left = test_x - sprite_width / 2;
+        fixed right = test_x + sprite_width / 2 - 1;
+        fixed top = test_y - sprite_height / 2;
+        fixed bottom = test_y + sprite_height / 2 - 1;
 
-        // Check all corners that could touch different tiles
-        return resolve(level, left, top) ||     // Top-left corner
-               resolve(level, right, top) ||    // Top-right corner
-               resolve(level, left, bottom) ||  // Bottom-left corner
-               resolve(level, right, bottom) || // Bottom-right corner
-               resolve(level, x, bottom);       // Bottom-center for better ground detection
+        return resolve(level, left, top) ||
+               resolve(level, right, top) ||
+               resolve(level, left, bottom) ||
+               resolve(level, right, bottom) ||
+               resolve(level, test_x, bottom);
     }
 
     void update()
     {
-        BN_LOG("Keypad: ", held(key_type::R));
+        auto &pm = physics_manager::instance();
 
-        // Handle horizontal movement
+        // Handle horizontal movement with pushing
         velocity_x = 0;
-        if (held(key_type::LEFT))
+        if (left_held())
         {
             velocity_x = -move_speed * (held(key_type::R) + 1);
         }
-        if (held(key_type::RIGHT))
+        if (right_held())
         {
             velocity_x = move_speed * (held(key_type::R) + 1);
         }
 
-        // Apply horizontal movement with collision check
-        fixed new_x = sp.x() + velocity_x;
-        if (!check_collision(new_x, sp.y()))
+        if (velocity_x != 0)
         {
-            sp.set_x(new_x);
+            fixed target_x = sp.x() + velocity_x;
+
+            // Check level collision first
+            if (!check_level_collision(target_x, sp.y()))
+            {
+                // Try to push clones
+                auto push_result = pm.try_push_horizontal(-1, true, target_x);
+
+                if (push_result.success)
+                {
+                    // Apply the push to all entities
+                    pm.apply_push(push_result, -1, true, velocity_x);
+                }
+            }
         }
 
-        // Apply gravity
+        // Apply gravity and vertical movement
         velocity_y += gravity;
 
-        // Apply vertical movement with collision check
-        fixed new_y = sp.y() + velocity_y;
+        if (velocity_y != 0)
+        {
+            fixed target_y = sp.y() + velocity_y;
 
-        // Check for ground collision
-        if (velocity_y > 0 && check_collision(sp.x(), new_y))
-        {
-            velocity_y = 0;
-            on_ground = true;
-            jump_count = 0; // Reset jump count when landing
-        }
-        // Check for ceiling collision
-        else if (velocity_y < 0 && check_collision(sp.x(), new_y))
-        {
-            velocity_y = 0;
-        }
-        else
-        {
-            sp.set_y(new_y);
-            on_ground = false;
+            if (velocity_y > 0)
+            {
+                bool level_collision = check_level_collision(sp.x(), target_y);
+                bool entity_support = pm.check_entity_support(-1, true, target_y);
+
+                if (level_collision || entity_support)
+                {
+                    velocity_y = 0;
+                    on_ground = true;
+                    jump_count = 0;
+                }
+                else
+                {
+                    set_position(sp.x(), target_y);
+                    on_ground = false;
+                }
+            }
+            else if (velocity_y < 0)
+            {
+                bool level_collision = check_level_collision(sp.x(), target_y);
+                bool entity_collision = pm.check_entity_support(-1, true, target_y);
+
+                if (level_collision || entity_collision)
+                {
+                    velocity_y = 0;
+                }
+                else
+                {
+                    set_position(sp.x(), target_y);
+                    on_ground = false;
+                }
+            }
         }
 
-        // Double jumping
-        if (pressed(key_type::A))
+        // Jumping
+        if (a_pressed())
         {
             if (jump_count < max_jumps)
             {
-                velocity_y = -8;
+                velocity_y = -24 * gravity;
                 jump_count++;
                 on_ground = false;
             }
         }
-
-        BN_LOG("Ground: ", on_ground, " Jumps: ", jump_count);
-
-        // Update camera to follow player
-        camera->set_position(sp.x(), sp.y());
     }
 };
 
+// Enhanced clone with physics integration
+struct clone_ptr : public entity_base
+{
+    const level_ptr *level;
+    fixed_t<4> gravity = 0.25;
+    fixed_t<4> move_speed = 2;
+    int max_jumps = 1;
+
+    camera_ptr *camera;
+    sprite_ptr sp = sprite_items::spr_test01.create_sprite(0, 0);
+    fixed_t<4> velocity_y = 0;
+    fixed_t<4> velocity_x = 0;
+
+    bool on_ground = false;
+    int jump_count = 0;
+    int history[256];
+    int init_x, init_y, h = 0;
+
+    // Check if this clone is in recording mode (ghost mode)
+    bool is_recording() const { return h < 256; }
+
+    clone_ptr(camera_ptr *camera_, const level_ptr *level_, int init_x_, int init_y_)
+        : camera(camera_), level(level_), init_x(init_x_), init_y(init_y_)
+    {
+        sp.set_camera(*camera);
+        sp.set_position(init_x, init_y);
+        sp.set_blending_enabled(true);
+        _x = sp.x();
+        _y = sp.y();
+    }
+
+    void set_position(fixed new_x, fixed new_y) override
+    {
+        sp.set_position(new_x, new_y);
+        _x = new_x;
+        _y = new_y;
+    }
+
+    bool check_level_collision(fixed test_x, fixed test_y) const override
+    {
+        constexpr int sprite_width = 32;
+        constexpr int sprite_height = 32;
+
+        fixed left = test_x - sprite_width / 2;
+        fixed right = test_x + sprite_width / 2 - 1;
+        fixed top = test_y - sprite_height / 2;
+        fixed bottom = test_y + sprite_height / 2 - 1;
+
+        return resolve(level, left, top) ||
+               resolve(level, right, top) ||
+               resolve(level, left, bottom) ||
+               resolve(level, right, bottom) ||
+               resolve(level, test_x, bottom);
+    }
+
+    void physics(int my_index)
+    {
+        int code = history[h % 256];
+        auto &pm = physics_manager::instance();
+
+        // Handle horizontal movement with pushing
+        velocity_x = 0;
+        if (code & LEFT)
+        {
+            velocity_x = -move_speed * ((code & DASH) > 0 ? 2 : 1);
+        }
+        if (code & RIGHT)
+        {
+            velocity_x = move_speed * ((code & DASH) > 0 ? 2 : 1);
+        }
+
+        if (velocity_x != 0)
+        {
+            fixed target_x = sp.x() + velocity_x;
+
+            // During recording phase, ignore all collisions - move freely
+            if (is_recording())
+            {
+                set_position(target_x, sp.y());
+            }
+            else
+            {
+                // Check level collision first
+                if (!check_level_collision(target_x, sp.y()))
+                {
+                    // Try to push other entities
+                    auto push_result = pm.try_push_horizontal(my_index, false, target_x);
+
+                    if (push_result.success)
+                    {
+                        // Apply the push to all entities
+                        pm.apply_push(push_result, my_index, false, velocity_x);
+                    }
+                }
+            }
+        }
+
+        // Apply gravity and handle vertical movement
+        velocity_y += gravity;
+
+        if (velocity_y != 0)
+        {
+            fixed target_y = sp.y() + velocity_y;
+
+            // During recording phase, ignore all collisions - move freely
+            if (is_recording())
+            {
+                set_position(sp.x(), target_y);
+                on_ground = false;
+            }
+            else
+            {
+                // Check for landing on other entities or level
+                if (velocity_y > 0)
+                {
+                    bool level_collision = check_level_collision(sp.x(), target_y);
+                    bool entity_support = pm.check_entity_support(my_index, false, target_y);
+
+                    if (level_collision || entity_support)
+                    {
+                        velocity_y = 0;
+                        on_ground = true;
+                        jump_count = 0;
+                    }
+                    else
+                    {
+                        set_position(sp.x(), target_y);
+                        on_ground = false;
+                    }
+                }
+                else if (velocity_y < 0)
+                {
+                    bool level_collision = check_level_collision(sp.x(), target_y);
+                    bool entity_collision = pm.check_entity_support(my_index, false, target_y);
+
+                    if (level_collision || entity_collision)
+                    {
+                        velocity_y = 0;
+                    }
+                    else
+                    {
+                        set_position(sp.x(), target_y);
+                        on_ground = false;
+                    }
+                }
+            }
+        }
+
+        // Jumping
+        if (code & JUMP)
+        {
+            if (jump_count < max_jumps)
+            {
+                velocity_y = -24 * gravity;
+                jump_count++;
+                on_ground = false;
+            }
+        }
+    }
+
+    // Check if respawn position would overlap with other entities
+    bool check_respawn_collision(int my_index) const
+    {
+        auto &pm = physics_manager::instance();
+        player_ptr *player = static_cast<player_ptr *>(pm.player_);
+        vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(pm.clones_);
+
+        entity_bounds my_bounds(init_x, init_y);
+
+        // Check collision with player
+        entity_bounds player_bounds(player->sp.x(), player->sp.y());
+        if (bounds_overlap(my_bounds, player_bounds))
+        {
+            return true;
+        }
+
+        // Check collision with other clones
+        for (int i = 0; i < clones_2->size(); ++i)
+        {
+            if (i != my_index)
+            {
+                entity_bounds other_bounds((*clones_2)[i].x(), (*clones_2)[i].y());
+                if (bounds_overlap(my_bounds, other_bounds))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // Returns true if clone should be destroyed
+    bool update(int my_index)
+    {
+        if (h < 256)
+        {
+            // Recording phase - ghost mode (no collisions)
+            int code = 0;
+            if (left_held())
+                code += 1;
+            if (right_held())
+                code += 2;
+            if (a_pressed())
+                code += 4;
+            if (r_held())
+                code += 8;
+
+            history[h] = code;
+
+            // Set visual indicator for recording mode
+            if (h == 0)
+            {
+                sp.set_blending_enabled(true);
+            }
+        }
+        else
+        {
+            // Playback phase - normal physics
+            if (h % 256 == 0)
+            {
+                // Check if respawn position is blocked
+                if (check_respawn_collision(my_index))
+                {
+                    return true; // Signal for destruction
+                }
+
+                set_position(init_x, init_y);
+                velocity_y = 0;
+                on_ground = false;
+                jump_count = 0;
+
+                // Reset visual appearance for playback
+                sp.set_blending_enabled(true);
+            }
+
+            physics(my_index);
+        }
+        h += 1;
+        return false; // Continue existing
+    }
+};
+
+// Physics manager implementation - here we have access to complete types
+entity_base *get_entity(int index, bool is_player)
+{
+    auto &pm = physics_manager::instance();
+    if (is_player)
+        return static_cast<player_ptr *>(pm.player_);
+    return &(*static_cast<vector<clone_ptr, 64> *>(pm.clones_))[index];
+}
+
+bool would_collide_with_entity(int moving_entity, bool moving_is_player,
+                               fixed test_x, fixed test_y,
+                               int other_entity, bool other_is_player)
+{
+    if (moving_is_player == other_is_player && moving_entity == other_entity)
+        return false;
+
+    auto &pm = physics_manager::instance();
+    vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(pm.clones_);
+
+    // Skip collision if either entity is a recording clone
+    if (!moving_is_player && moving_entity >= 0 && moving_entity < clones_2->size())
+    {
+        if ((*clones_2)[moving_entity].is_recording())
+            return false;
+    }
+    if (!other_is_player && other_entity >= 0 && other_entity < clones_2->size())
+    {
+        if ((*clones_2)[other_entity].is_recording())
+            return false;
+    }
+
+    entity_base *other = get_entity(other_entity, other_is_player);
+    entity_bounds moving_bounds(test_x, test_y);
+    entity_bounds other_bounds(other->x(), other->y());
+
+    return bounds_overlap(moving_bounds, other_bounds);
+}
+
+push_result physics_manager::try_push_horizontal(int pusher_index, bool is_player, fixed target_x)
+{
+    push_result result;
+    entity_base *pusher = get_entity(pusher_index, is_player);
+    vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(this->clones_);
+
+    // Skip collision detection if the pusher is a recording clone
+    if (!is_player && pusher_index >= 0 && pusher_index < clones_2->size())
+    {
+        if ((*clones_2)[pusher_index].is_recording())
+        {
+            result.success = true;
+            result.final_position = target_x;
+            return result;
+        }
+    }
+
+    // Check what entities would be collided with
+    vector<pair<int, bool>, 64> colliding_entities;
+
+    // Check collision with player
+    if (!is_player && would_collide_with_entity(pusher_index, is_player, target_x, pusher->y(), -1, true))
+    {
+        colliding_entities.push_back({-1, true});
+    }
+
+    // Check collision with clones
+    for (int i = 0; i < clones_2->size(); ++i)
+    {
+        if (is_player || i != pusher_index)
+        {
+            if (would_collide_with_entity(pusher_index, is_player, target_x, pusher->y(), i, false))
+            {
+                colliding_entities.push_back({i, false});
+            }
+        }
+    }
+
+    if (colliding_entities.empty())
+    {
+        // No collision, can move freely
+        result.success = true;
+        result.final_position = target_x;
+        return result;
+    }
+
+    // Try to push all colliding entities
+    fixed movement = target_x - pusher->x();
+    bool can_push_all = true;
+
+    for (auto [entity_idx, entity_is_player] : colliding_entities)
+    {
+        entity_base *entity = get_entity(entity_idx, entity_is_player);
+        fixed entity_target = entity->x() + movement;
+
+        // Check if this entity can move to its target position
+        if (entity->check_level_collision(entity_target, entity->y()))
+        {
+            can_push_all = false;
+            break;
+        }
+
+        // Check if this entity would collide with other entities after being pushed
+        // Check collision with player
+        if (!entity_is_player && would_collide_with_entity(entity_idx, entity_is_player, entity_target, entity->y(), -1, true))
+        {
+            // Would push into player, check if player can be pushed too
+            if (find(colliding_entities.begin(), colliding_entities.end(), make_pair(-1, true)) == colliding_entities.end())
+            {
+                can_push_all = false;
+                break;
+            }
+        }
+
+        // Check collision with clones
+        for (int i = 0; i < clones_2->size(); ++i)
+        {
+            if (entity_is_player || i != entity_idx)
+            {
+                if (would_collide_with_entity(entity_idx, entity_is_player, entity_target, entity->y(), i, false))
+                {
+                    // Would push into another clone, check if that clone is also being pushed
+                    if (find(colliding_entities.begin(), colliding_entities.end(), make_pair(i, false)) == colliding_entities.end())
+                    {
+                        can_push_all = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!can_push_all)
+            break;
+    }
+
+    if (can_push_all)
+    {
+        result.success = true;
+        result.final_position = target_x;
+        // Store which entities would be pushed
+        for (auto [entity_idx, entity_is_player] : colliding_entities)
+        {
+            result.pushed_entities.push_back(entity_is_player ? -1 : entity_idx);
+        }
+    }
+
+    return result;
+}
+
+bool physics_manager::check_entity_support(int entity_index, bool is_player, fixed test_y)
+{
+    entity_base *entity = get_entity(entity_index, is_player);
+    vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(this->clones_);
+
+    // Skip collision if the entity checking support is a recording clone
+    if (!is_player && entity_index >= 0 && entity_index < clones_2->size())
+    {
+        if ((*clones_2)[entity_index].is_recording())
+        {
+            return false; // Recording clones don't get support from other entities
+        }
+    }
+
+    // Check if standing on player
+    if (!is_player && would_collide_with_entity(entity_index, is_player, entity->x(), test_y, -1, true))
+    {
+        return true;
+    }
+
+    // Check if standing on clones
+    for (int i = 0; i < clones_2->size(); ++i)
+    {
+        if (is_player || i != entity_index)
+        {
+            if (would_collide_with_entity(entity_index, is_player, entity->x(), test_y, i, false))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void physics_manager::apply_push(const push_result &result, int pusher_index, bool is_player, fixed movement)
+{
+    // Move the pusher
+    entity_base *pusher = get_entity(pusher_index, is_player);
+    pusher->set_position(result.final_position, pusher->y());
+
+    // Move all pushed entities
+    player_ptr *player = static_cast<player_ptr *>(this->player_);
+    vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(this->clones_);
+
+    for (int pushed_idx : result.pushed_entities)
+    {
+        if (pushed_idx == -1)
+        {
+            // Push player
+            player->set_position(player->x() + movement, player->y());
+        }
+        else
+        {
+            // Push clone
+            entity_base *clone = &(*clones_2)[pushed_idx];
+            clone->set_position(clone->x() + movement, clone->y());
+        }
+    }
+}
+
+// Main function
 int main()
 {
     core::init();
 
     const level_ptr level = {
+        &regular_bg_items::bg_test02,
         {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -180,16 +683,53 @@ int main()
         7,
         5};
 
+    blending::set_transparency_alpha(0.5);
+
     auto camera = camera_ptr::create(0, 0);
-    auto bg = regular_bg_items::bg_test02.create_bg(
+    auto bg = level.bg_item->create_bg(
         to_pixel(level.size_x / 2) + 16,
         to_pixel(level.size_y / 2) + 16);
     bg.set_camera(camera);
 
-    Player player = {&camera, &level};
+    player_ptr player = {&camera, &level};
+    vector<clone_ptr, 64> clones;
+
+    // Register entities with physics manager (using void* to avoid circular dependencies)
+    physics_manager::instance().register_entities(&player, &clones);
 
     while (true)
     {
+        if (b_pressed())
+        {
+            clone_ptr new_clone = {&camera, &level, player.sp.x().integer(), player.sp.y().integer()};
+            clones.push_back(new_clone);
+        }
+
+        // Update clones (iterate backwards to safely remove during iteration)
+        for (int i = clones.size() - 1; i >= 0; --i)
+        {
+            bool should_destroy = clones.at(i).update(i);
+            if (should_destroy)
+            {
+                clones.erase(clones.begin() + i);
+            }
+        }
+
+        // Update camera to follow player
+        if (player.on_ground || (player.sp.y() - camera.y() > 36))
+        {
+            camera.set_position(player.sp.x(), lerp(camera.y(), player.sp.y().integer() + 24, 0.2));
+        }
+        else if (player.sp.y() - camera.y() < 0)
+        {
+            camera.set_position(player.sp.x(), player.sp.y());
+        }
+        else
+        {
+            camera.set_position(player.sp.x(), camera.y());
+        }
+
+        // Update player
         player.update();
         core::update();
     }
