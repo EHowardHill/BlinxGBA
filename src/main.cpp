@@ -1,5 +1,3 @@
-// Enhanced physics with full pushing mechanics
-
 #include <bn_core.h>
 #include <bn_keypad.h>
 #include <bn_blending.h>
@@ -30,6 +28,7 @@ const int LEFT = 1;
 const int RIGHT = 2;
 const int JUMP = 4;
 const int DASH = 8;
+const int CLONE_COUNT = 4;
 
 constexpr int TILE_SIZE = 32;
 constexpr int to_tile(int pixel) { return pixel / TILE_SIZE; }
@@ -67,12 +66,12 @@ constexpr bool resolve(const level_ptr *level, fixed x, fixed y)
 // Enhanced player with physics integration
 struct player_ptr : public entity_base
 {
+    camera_ptr *camera;
     const level_ptr *level;
+
     const fixed_t<4> gravity = 0.25;
     const fixed_t<4> move_speed = 2;
     const int max_jumps = 1;
-
-    camera_ptr *camera;
     sprite_ptr sp = sprite_items::spr_test01.create_sprite(0, 0);
     fixed_t<4> velocity_y = 0;
     fixed_t<4> velocity_x = 0;
@@ -202,12 +201,14 @@ struct player_ptr : public entity_base
 // Enhanced clone with physics integration
 struct clone_ptr : public entity_base
 {
+    camera_ptr *camera;
     const level_ptr *level;
+    int init_x, init_y, h = 0;
+
     fixed_t<4> gravity = 0.25;
     fixed_t<4> move_speed = 2;
     int max_jumps = 1;
 
-    camera_ptr *camera;
     sprite_ptr sp = sprite_items::spr_test01.create_sprite(0, 0);
     fixed_t<4> velocity_y = 0;
     fixed_t<4> velocity_x = 0;
@@ -215,7 +216,6 @@ struct clone_ptr : public entity_base
     bool on_ground = false;
     int jump_count = 0;
     int history[256];
-    int init_x, init_y, h = 0;
 
     // Check if this clone is in recording mode (ghost mode)
     bool is_recording() const { return h < 256; }
@@ -364,7 +364,7 @@ struct clone_ptr : public entity_base
     {
         auto &pm = physics_manager::instance();
         player_ptr *player = static_cast<player_ptr *>(pm.player_);
-        vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(pm.clones_);
+        vector<clone_ptr, CLONE_COUNT> *clones_2 = static_cast<vector<clone_ptr, CLONE_COUNT> *>(pm.clones_);
 
         entity_bounds my_bounds(init_x, init_y);
 
@@ -448,7 +448,7 @@ entity_base *get_entity(int index, bool is_player)
     auto &pm = physics_manager::instance();
     if (is_player)
         return static_cast<player_ptr *>(pm.player_);
-    return &(*static_cast<vector<clone_ptr, 64> *>(pm.clones_))[index];
+    return &(*static_cast<vector<clone_ptr, CLONE_COUNT> *>(pm.clones_))[index];
 }
 
 bool would_collide_with_entity(int moving_entity, bool moving_is_player,
@@ -459,7 +459,7 @@ bool would_collide_with_entity(int moving_entity, bool moving_is_player,
         return false;
 
     auto &pm = physics_manager::instance();
-    vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(pm.clones_);
+    vector<clone_ptr, CLONE_COUNT> *clones_2 = static_cast<vector<clone_ptr, CLONE_COUNT> *>(pm.clones_);
 
     // Skip collision if either entity is a recording clone
     if (!moving_is_player && moving_entity >= 0 && moving_entity < clones_2->size())
@@ -484,7 +484,7 @@ push_result physics_manager::try_push_horizontal(int pusher_index, bool is_playe
 {
     push_result result;
     entity_base *pusher = get_entity(pusher_index, is_player);
-    vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(this->clones_);
+    vector<clone_ptr, CLONE_COUNT> *clones_2 = static_cast<vector<clone_ptr, CLONE_COUNT> *>(this->clones_);
 
     // Skip collision detection if the pusher is a recording clone
     if (!is_player && pusher_index >= 0 && pusher_index < clones_2->size())
@@ -498,7 +498,7 @@ push_result physics_manager::try_push_horizontal(int pusher_index, bool is_playe
     }
 
     // Check what entities would be collided with
-    vector<pair<int, bool>, 64> colliding_entities;
+    vector<pair<int, bool>, CLONE_COUNT> colliding_entities;
 
     // Check collision with player
     if (!is_player && would_collide_with_entity(pusher_index, is_player, target_x, pusher->y(), -1, true))
@@ -592,7 +592,7 @@ push_result physics_manager::try_push_horizontal(int pusher_index, bool is_playe
 bool physics_manager::check_entity_support(int entity_index, bool is_player, fixed test_y)
 {
     entity_base *entity = get_entity(entity_index, is_player);
-    vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(this->clones_);
+    vector<clone_ptr, CLONE_COUNT> *clones_2 = static_cast<vector<clone_ptr, CLONE_COUNT> *>(this->clones_);
 
     // Skip collision if the entity checking support is a recording clone
     if (!is_player && entity_index >= 0 && entity_index < clones_2->size())
@@ -632,7 +632,7 @@ void physics_manager::apply_push(const push_result &result, int pusher_index, bo
 
     // Move all pushed entities
     player_ptr *player = static_cast<player_ptr *>(this->player_);
-    vector<clone_ptr, 64> *clones_2 = static_cast<vector<clone_ptr, 64> *>(this->clones_);
+    vector<clone_ptr, CLONE_COUNT> *clones_2 = static_cast<vector<clone_ptr, CLONE_COUNT> *>(this->clones_);
 
     for (int pushed_idx : result.pushed_entities)
     {
@@ -692,7 +692,7 @@ int main()
     bg.set_camera(camera);
 
     player_ptr player = {&camera, &level};
-    vector<clone_ptr, 64> clones;
+    vector<clone_ptr, CLONE_COUNT> clones;
 
     // Register entities with physics manager (using void* to avoid circular dependencies)
     physics_manager::instance().register_entities(&player, &clones);
