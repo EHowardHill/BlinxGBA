@@ -14,6 +14,7 @@
 #include "bn_sprite_items_spr_test01.h"
 
 using namespace bn;
+using namespace keypad;
 
 constexpr int TILE_SIZE = 32;
 constexpr int to_tile(int pixel) { return pixel / TILE_SIZE; }
@@ -86,17 +87,17 @@ public:
 
     void update()
     {
-        BN_LOG("Keypad: ", keypad::held(keypad::key_type::R));
+        BN_LOG("Keypad: ", held(key_type::R));
 
         // Handle horizontal movement
         velocity_x = 0;
-        if (keypad::held(keypad::key_type::LEFT))
+        if (held(key_type::LEFT))
         {
-            velocity_x = -move_speed * (keypad::held(keypad::key_type::R) + 1);
+            velocity_x = -move_speed * (held(key_type::R) + 1);
         }
-        if (keypad::held(keypad::key_type::RIGHT))
+        if (held(key_type::RIGHT))
         {
-            velocity_x = move_speed * (keypad::held(keypad::key_type::R) + 1);
+            velocity_x = move_speed * (held(key_type::R) + 1);
         }
 
         // Apply horizontal movement with collision check
@@ -131,7 +132,7 @@ public:
         }
 
         // Double jumping
-        if (keypad::pressed(keypad::key_type::A))
+        if (pressed(key_type::A))
         {
             if (jump_count < max_jumps)
             {
