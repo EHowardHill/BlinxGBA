@@ -10,88 +10,27 @@
 
 // Backgrounds and sprites
 #include <bn_regular_bg_items_bg_test01.h>
-#include <bn_regular_bg_items_bg_test02.h>
 #include "bn_sprite_items_spr_test01.h"
 
-// Include our physics module
+// Include modules
 #include "physics.h"
+#include "maps.h"
 
 using namespace bn;
 using namespace keypad;
 
-fixed_t<12> lerp(fixed a, int b, fixed_t<12> t)
-{
-    return a * (1 - t) + b * t;
-}
-
-const int LEFT = 1;
-const int RIGHT = 2;
-const int JUMP = 4;
-const int DASH = 8;
-const int CLONE_COUNT = 4;
-
-constexpr int TILE_SIZE = 32;
-constexpr int to_tile(int pixel) { return pixel / TILE_SIZE; }
-constexpr int to_pixel(int tile) { return tile * TILE_SIZE; }
-
-// Forward declarations
-struct clone_ptr;
-struct player_ptr;
-
-// Level structure
-struct level_ptr
-{
-    const regular_bg_item *bg_item;
-    const int collisions[512];
-    int size_x;
-    int size_y;
-    int init_x;
-    int init_y;
-};
-
-// Collision resolution
-constexpr bool resolve(const level_ptr *level, fixed x, fixed y)
-{
-    int tile_x = to_tile(x.integer());
-    int tile_y = to_tile(y.integer());
-
-    if (tile_x < 0 || tile_x >= level->size_x ||
-        tile_y < 0 || tile_y >= level->size_y)
-        return true;
-
-    int index = tile_y * level->size_x + tile_x;
-    return level->collisions[index] > 0;
-}
+#include "main.h"
 
 // Enhanced player with physics integration
-struct player_ptr : public entity_base
+struct player_ptr : entity_base
 {
-    camera_ptr *camera;
-    const level_ptr *level;
-
-    const fixed_t<4> gravity = 0.25;
-    const fixed_t<4> move_speed = 2;
-    const int max_jumps = 1;
-    sprite_ptr sp = sprite_items::spr_test01.create_sprite(0, 0);
-    fixed_t<4> velocity_y = 0;
-    fixed_t<4> velocity_x = 0;
-
-    bool on_ground = false;
-    int jump_count = 0;
-
-    player_ptr(camera_ptr *camera_, const level_ptr *level_) : camera(camera_), level(level_)
+    player_ptr()
     {
-        sp.set_camera(*camera);
-        sp.set_position(to_pixel(level->init_x), to_pixel(level->init_y));
-        _x = sp.x();
-        _y = sp.y();
-    }
-
-    void set_position(fixed new_x, fixed new_y) override
-    {
-        sp.set_position(new_x, new_y);
-        _x = new_x;
-        _y = new_y;
+        osp = sprite_items::spr_test01.create_sprite(0, 0);
+        sp()->set_camera(globals->camera);
+        sp()->set_position(to_pixel(globals->level->init_x), to_pixel(globals->level->init_y));
+        _x = sp()->x();
+        _y = sp()->y();
     }
 
     bool check_level_collision(fixed test_x, fixed test_y) const override
@@ -104,11 +43,11 @@ struct player_ptr : public entity_base
         fixed top = test_y - sprite_height / 2;
         fixed bottom = test_y + sprite_height / 2 - 1;
 
-        return resolve(level, left, top) ||
-               resolve(level, right, top) ||
-               resolve(level, left, bottom) ||
-               resolve(level, right, bottom) ||
-               resolve(level, test_x, bottom);
+        return resolve(left, top) ||
+               resolve(right, top) ||
+               resolve(left, bottom) ||
+               resolve(right, bottom) ||
+               resolve(test_x, bottom);
     }
 
     void update()
@@ -128,10 +67,10 @@ struct player_ptr : public entity_base
 
         if (velocity_x != 0)
         {
-            fixed target_x = sp.x() + velocity_x;
+            fixed target_x = sp()->x() + velocity_x;
 
-            // Check level collision first
-            if (!check_level_collision(target_x, sp.y()))
+            // Check globals->level collision first
+            if (!check_level_collision(target_x, sp()->y()))
             {
                 // Try to push clones
                 auto push_result = pm.try_push_horizontal(-1, true, target_x);
@@ -144,16 +83,16 @@ struct player_ptr : public entity_base
             }
         }
 
-        // Apply gravity and vertical movement
-        velocity_y += gravity;
+        // Apply GRAVITY and vertical movement
+        velocity_y += GRAVITY;
 
         if (velocity_y != 0)
         {
-            fixed target_y = sp.y() + velocity_y;
+            fixed target_y = sp()->y() + velocity_y;
 
             if (velocity_y > 0)
             {
-                bool level_collision = check_level_collision(sp.x(), target_y);
+                bool level_collision = check_level_collision(sp()->x(), target_y);
                 bool entity_support = pm.check_entity_support(-1, true, target_y);
 
                 if (level_collision || entity_support)
@@ -164,13 +103,13 @@ struct player_ptr : public entity_base
                 }
                 else
                 {
-                    set_position(sp.x(), target_y);
+                    set_position(sp()->x(), target_y);
                     on_ground = false;
                 }
             }
             else if (velocity_y < 0)
             {
-                bool level_collision = check_level_collision(sp.x(), target_y);
+                bool level_collision = check_level_collision(sp()->x(), target_y);
                 bool entity_collision = pm.check_entity_support(-1, true, target_y);
 
                 if (level_collision || entity_collision)
@@ -179,7 +118,7 @@ struct player_ptr : public entity_base
                 }
                 else
                 {
-                    set_position(sp.x(), target_y);
+                    set_position(sp()->x(), target_y);
                     on_ground = false;
                 }
             }
@@ -190,7 +129,7 @@ struct player_ptr : public entity_base
         {
             if (jump_count < max_jumps)
             {
-                velocity_y = -24 * gravity;
+                velocity_y = -24 * GRAVITY;
                 jump_count++;
                 on_ground = false;
             }
@@ -199,42 +138,24 @@ struct player_ptr : public entity_base
 };
 
 // Enhanced clone with physics integration
-struct clone_ptr : public entity_base
+struct clone_ptr : entity_base
 {
-    camera_ptr *camera;
-    const level_ptr *level;
     int init_x, init_y, h = 0;
 
-    fixed_t<4> gravity = 0.25;
-    fixed_t<4> move_speed = 2;
-    int max_jumps = 1;
-
-    sprite_ptr sp = sprite_items::spr_test01.create_sprite(0, 0);
-    fixed_t<4> velocity_y = 0;
-    fixed_t<4> velocity_x = 0;
-
-    bool on_ground = false;
-    int jump_count = 0;
     int history[256];
 
     // Check if this clone is in recording mode (ghost mode)
     bool is_recording() const { return h < 256; }
 
-    clone_ptr(camera_ptr *camera_, const level_ptr *level_, int init_x_, int init_y_)
-        : camera(camera_), level(level_), init_x(init_x_), init_y(init_y_)
+    clone_ptr(int init_x_, int init_y_)
+        : init_x(init_x_), init_y(init_y_)
     {
-        sp.set_camera(*camera);
-        sp.set_position(init_x, init_y);
-        sp.set_blending_enabled(true);
-        _x = sp.x();
-        _y = sp.y();
-    }
-
-    void set_position(fixed new_x, fixed new_y) override
-    {
-        sp.set_position(new_x, new_y);
-        _x = new_x;
-        _y = new_y;
+        osp = sprite_items::spr_test01.create_sprite(0, 0);
+        sp()->set_camera(globals->camera);
+        sp()->set_position(init_x, init_y);
+        sp()->set_blending_enabled(true);
+        _x = sp()->x();
+        _y = sp()->y();
     }
 
     bool check_level_collision(fixed test_x, fixed test_y) const override
@@ -247,11 +168,11 @@ struct clone_ptr : public entity_base
         fixed top = test_y - sprite_height / 2;
         fixed bottom = test_y + sprite_height / 2 - 1;
 
-        return resolve(level, left, top) ||
-               resolve(level, right, top) ||
-               resolve(level, left, bottom) ||
-               resolve(level, right, bottom) ||
-               resolve(level, test_x, bottom);
+        return resolve(left, top) ||
+               resolve(right, top) ||
+               resolve(left, bottom) ||
+               resolve(right, bottom) ||
+               resolve(test_x, bottom);
     }
 
     void physics(int my_index)
@@ -272,17 +193,17 @@ struct clone_ptr : public entity_base
 
         if (velocity_x != 0)
         {
-            fixed target_x = sp.x() + velocity_x;
+            fixed target_x = sp()->x() + velocity_x;
 
             // During recording phase, ignore all collisions - move freely
             if (is_recording())
             {
-                set_position(target_x, sp.y());
+                set_position(target_x, sp()->y());
             }
             else
             {
-                // Check level collision first
-                if (!check_level_collision(target_x, sp.y()))
+                // Check globals->level collision first
+                if (!check_level_collision(target_x, sp()->y()))
                 {
                     // Try to push other entities
                     auto push_result = pm.try_push_horizontal(my_index, false, target_x);
@@ -296,25 +217,25 @@ struct clone_ptr : public entity_base
             }
         }
 
-        // Apply gravity and handle vertical movement
-        velocity_y += gravity;
+        // Apply GRAVITY and handle vertical movement
+        velocity_y += GRAVITY;
 
         if (velocity_y != 0)
         {
-            fixed target_y = sp.y() + velocity_y;
+            fixed target_y = sp()->y() + velocity_y;
 
             // During recording phase, ignore all collisions - move freely
             if (is_recording())
             {
-                set_position(sp.x(), target_y);
+                set_position(sp()->x(), target_y);
                 on_ground = false;
             }
             else
             {
-                // Check for landing on other entities or level
+                // Check for landing on other entities or globals->level
                 if (velocity_y > 0)
                 {
-                    bool level_collision = check_level_collision(sp.x(), target_y);
+                    bool level_collision = check_level_collision(sp()->x(), target_y);
                     bool entity_support = pm.check_entity_support(my_index, false, target_y);
 
                     if (level_collision || entity_support)
@@ -325,13 +246,13 @@ struct clone_ptr : public entity_base
                     }
                     else
                     {
-                        set_position(sp.x(), target_y);
+                        set_position(sp()->x(), target_y);
                         on_ground = false;
                     }
                 }
                 else if (velocity_y < 0)
                 {
-                    bool level_collision = check_level_collision(sp.x(), target_y);
+                    bool level_collision = check_level_collision(sp()->x(), target_y);
                     bool entity_collision = pm.check_entity_support(my_index, false, target_y);
 
                     if (level_collision || entity_collision)
@@ -340,7 +261,7 @@ struct clone_ptr : public entity_base
                     }
                     else
                     {
-                        set_position(sp.x(), target_y);
+                        set_position(sp()->x(), target_y);
                         on_ground = false;
                     }
                 }
@@ -352,7 +273,7 @@ struct clone_ptr : public entity_base
         {
             if (jump_count < max_jumps)
             {
-                velocity_y = -24 * gravity;
+                velocity_y = -24 * GRAVITY;
                 jump_count++;
                 on_ground = false;
             }
@@ -369,7 +290,7 @@ struct clone_ptr : public entity_base
         entity_bounds my_bounds(init_x, init_y);
 
         // Check collision with player
-        entity_bounds player_bounds(player->sp.x(), player->sp.y());
+        entity_bounds player_bounds(player->sp()->x(), player->sp()->y());
         if (bounds_overlap(my_bounds, player_bounds))
         {
             return true;
@@ -412,7 +333,7 @@ struct clone_ptr : public entity_base
             // Set visual indicator for recording mode
             if (h == 0)
             {
-                sp.set_blending_enabled(true);
+                sp()->set_blending_enabled(true);
             }
         }
         else
@@ -432,7 +353,7 @@ struct clone_ptr : public entity_base
                 jump_count = 0;
 
                 // Reset visual appearance for playback
-                sp.set_blending_enabled(true);
+                sp()->set_blending_enabled(true);
             }
 
             physics(my_index);
@@ -654,54 +575,24 @@ void physics_manager::apply_push(const push_result &result, int pusher_index, bo
 int main()
 {
     core::init();
-
-    const level_ptr level = {
-        &regular_bg_items::bg_test02,
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0,
-         0, 4, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 0, 0,
-         0, 4, 0, 4, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 4, 4, 0,
-         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3},
-        21,
-        21,
-        7,
-        5};
+    globals = new global_data();
 
     blending::set_transparency_alpha(0.5);
 
-    auto camera = camera_ptr::create(0, 0);
-    auto bg = level.bg_item->create_bg(
-        to_pixel(level.size_x / 2) + 16,
-        to_pixel(level.size_y / 2) + 16);
-    bg.set_camera(camera);
+    auto bg = globals->level->bg_item->create_bg(
+        to_pixel(globals->level->size_x / 2) + 16,
+        to_pixel(globals->level->size_y / 2) + 16);
+    bg.set_camera(globals->camera);
 
-    player_ptr player = {&camera, &level};
+    player_ptr player;
     vector<clone_ptr, CLONE_COUNT> clones;
-
-    // Register entities with physics manager (using void* to avoid circular dependencies)
     physics_manager::instance().register_entities(&player, &clones);
 
     while (true)
     {
         if (b_pressed())
         {
-            clone_ptr new_clone = {&camera, &level, player.sp.x().integer(), player.sp.y().integer()};
+            clone_ptr new_clone = {player.sp()->x().integer(), player.sp()->y().integer()};
             clones.push_back(new_clone);
         }
 
@@ -716,17 +607,17 @@ int main()
         }
 
         // Update camera to follow player
-        if (player.on_ground || (player.sp.y() - camera.y() > 36))
+        if (player.on_ground || (player.sp()->y() - globals->camera.y() > 36))
         {
-            camera.set_position(player.sp.x(), lerp(camera.y(), player.sp.y().integer() + 24, 0.2));
+            globals->camera.set_position(player.sp()->x(), lerp(globals->camera.y(), player.sp()->y().integer() + 24, 0.2));
         }
-        else if (player.sp.y() - camera.y() < 0)
+        else if (player.sp()->y() - globals->camera.y() < 0)
         {
-            camera.set_position(player.sp.x(), player.sp.y());
+            globals->camera.set_position(player.sp()->x(), player.sp()->y());
         }
         else
         {
-            camera.set_position(player.sp.x(), camera.y());
+            globals->camera.set_position(player.sp()->x(), globals->camera.y());
         }
 
         // Update player

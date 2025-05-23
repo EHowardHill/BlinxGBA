@@ -3,6 +3,8 @@
 #include <bn_core.h>
 #include <bn_vector.h>
 #include <bn_fixed.h>
+#include <bn_sprite_ptr.h>
+#include <bn_optional.h>
 
 using namespace bn;
 
@@ -22,16 +24,36 @@ struct push_result
     vector<int, 64> pushed_entities; // indices of entities that would be pushed
 };
 
+const fixed_t<4> GRAVITY = 0.25;
+
 // Base entity interface for polymorphic collision handling
 struct entity_base
 {
     fixed x() const { return _x; }
     fixed y() const { return _y; }
-    virtual void set_position(fixed new_x, fixed new_y) = 0;
     virtual bool check_level_collision(fixed test_x, fixed test_y) const = 0;
     virtual ~entity_base() = default;
 
-protected:
+    optional<sprite_ptr> osp;
+    fixed_t<4> move_speed = 2;
+    fixed_t<4> velocity_y = 0;
+    fixed_t<4> velocity_x = 0;
+    int max_jumps = 1;
+    int jump_count = 0;
+    bool on_ground = false;
+
+    sprite_ptr *sp()
+    {
+        return &osp.value();
+    }
+
+    void set_position(fixed new_x, fixed new_y)
+    {
+        osp.value().set_position(new_x, new_y);
+        _x = new_x;
+        _y = new_y;
+    }
+
     fixed _x = 0, _y = 0;
 };
 
@@ -39,9 +61,8 @@ protected:
 bool bounds_overlap(const entity_bounds &a, const entity_bounds &b);
 
 // Physics manager interface - implementations will be in main.cpp to avoid circular dependencies
-class physics_manager
+struct physics_manager
 {
-public:
     static physics_manager &instance();
 
     // Simple data storage - no complex logic here
