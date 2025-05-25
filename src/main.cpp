@@ -35,8 +35,8 @@ struct player_ptr : entity_base
 
     bool check_level_collision(fixed test_x, fixed test_y) const override
     {
-        constexpr int sprite_width = 32;
-        constexpr int sprite_height = 32;
+        constexpr int sprite_width = 31;
+        constexpr int sprite_height = 31;
 
         fixed left = test_x - sprite_width / 2;
         fixed right = test_x + sprite_width / 2 - 1;
@@ -593,6 +593,10 @@ int main()
         if (b_pressed())
         {
             clone_ptr new_clone = {player.sp()->x().integer(), player.sp()->y().integer()};
+            if (clones.size() == CLONE_COUNT)
+            {
+                clones.erase(clones.begin());
+            }
             clones.push_back(new_clone);
         }
 

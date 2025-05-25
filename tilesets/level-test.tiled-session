@@ -7,7 +7,7 @@
     "expandedProjectPaths": [
         "."
     ],
-    "exportAsImage.includeBackgroundColor": true,
+    "exportAsImage.includeBackgroundColor": false,
     "fileStates": {
         "Demo.tsx": {
             "scaleInDock": 1,
