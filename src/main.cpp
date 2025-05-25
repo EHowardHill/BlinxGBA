@@ -12,13 +12,12 @@
 #include <bn_regular_bg_items_bg_test01.h>
 #include "bn_sprite_items_spr_test01.h"
 
-// Include modules
-#include "physics.h"
-#include "maps.h"
-
 using namespace bn;
 using namespace keypad;
 
+// Include modules
+#include "physics.h"
+#include "maps.h"
 #include "main.h"
 
 // Enhanced player with physics integration
